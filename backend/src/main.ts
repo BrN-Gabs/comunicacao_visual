@@ -4,6 +4,8 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const port = Number(process.env.PORT || 3000);
+  const host = process.env.HOST || '0.0.0.0';
   const allowedOrigins = new Set(
     (
       process.env.CORS_ORIGINS ??
@@ -45,6 +47,6 @@ async function bootstrap() {
     }),
   );
 
-  await app.listen(process.env.PORT || 3000);
+  await app.listen(port, host);
 }
 void bootstrap();

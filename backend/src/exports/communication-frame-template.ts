@@ -157,4 +157,12 @@ function loadTemplate(): CommunicationFrameTemplate {
   };
 }
 
-export const communicationFrameTemplate = loadTemplate();
+let cachedTemplate: CommunicationFrameTemplate | null = null;
+
+export function getCommunicationFrameTemplate() {
+  if (!cachedTemplate) {
+    cachedTemplate = loadTemplate();
+  }
+
+  return cachedTemplate;
+}

@@ -10,7 +10,7 @@ import sharp from 'sharp';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { communicationFrameTemplate } from './communication-frame-template';
+import { getCommunicationFrameTemplate } from './communication-frame-template';
 
 type CurrentUser = {
   id: string;
@@ -473,6 +473,7 @@ export class ExportsService {
   }
 
   private async renderFrameJpgBuffer(frame: ExportableReadyFrame) {
+    const communicationFrameTemplate = getCommunicationFrameTemplate();
     const numericWidth = Number(frame.widthM);
     const numericHeight = Number(frame.heightM);
     const widthPx = Math.round(numericWidth * 1200);
