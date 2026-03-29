@@ -1,0 +1,246 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  VIP
+  NORMAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum GazinImageStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CommunicationStatus {
+  IN_PROGRESS
+  FINALIZED
+  DIVERGENT
+  VALIDATED
+}
+
+model User {
+  id                      String              @id @default(uuid())
+  name                    String
+  email                   String              @unique
+  passwordHash            String
+  failedLoginAttempts     Int                 @default(0)
+  loginLockLevel          Int                 @default(0)
+  loginLockedUntil        DateTime?
+  role                    UserRole            @default(NORMAL)
+  status                  UserStatus          @default(ACTIVE)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  gazinLibraryImages      GazinLibraryImage[]
+  createdCommunications   Communication[]     @relation("CreatedCommunications")
+  validatedCommunications Communication[]     @relation("ValidatedCommunications")
+  communicationStatusChanges CommunicationStatusHistory[]
+  auditLogs               AuditLog[]
+}
+
+model GazinLibraryImage {
+  id          String           @id @default(uuid())
+  title       String
+  description String
+  imageUrl    String
+  status      GazinImageStatus @default(ACTIVE)
+
+  createdById String
+  createdBy   User             @relation(fields: [createdById], references: [id])
+
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  projectGazinImages ProjectGazinImage[]
+}
+
+model Communication {
+  id                String              @id @default(uuid())
+  storeName         String
+  cityLibraryId     String?
+  cityLibrary       CityLibraryCity?    @relation(fields: [cityLibraryId], references: [id], onDelete: SetNull)
+  cityName          String
+  state             String
+  fullName          String
+
+  status            CommunicationStatus @default(IN_PROGRESS)
+  divergenceComment String?
+
+  totalWalls        Int                 @default(0)
+  totalFrames       Int                 @default(0)
+
+  createdById       String
+  createdBy         User                @relation("CreatedCommunications", fields: [createdById], references: [id])
+
+  validatedById     String?
+  validatedBy       User?               @relation("ValidatedCommunications", fields: [validatedById], references: [id])
+
+  finalizedAt       DateTime?
+  validatedAt       DateTime?
+
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  walls             Wall[]
+  statusHistory     CommunicationStatusHistory[]
+  cityImages        ProjectCityImage[]
+  projectGazinImages ProjectGazinImage[]
+}
+
+model CityLibraryCity {
+  id            String             @id @default(uuid())
+  name          String
+  state         String
+  fullName      String
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  photographers CityPhotographer[]
+  communications Communication[]
+}
+
+model CityPhotographer {
+  id        String            @id @default(uuid())
+  cityId    String
+  city      CityLibraryCity   @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  images    CityLibraryImage[]
+}
+
+model CityLibraryImage {
+  id             String            @id @default(uuid())
+  photographerId String
+  photographer   CityPhotographer  @relation(fields: [photographerId], references: [id], onDelete: Cascade)
+  imageUrl       String
+  fileName       String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+}
+
+model Wall {
+  id               String         @id @default(uuid())
+  communicationId  String
+  communication    Communication  @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  name             String
+  order            Int
+
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  frames           Frame[]
+}
+
+model Frame {
+  id                  String            @id @default(uuid())
+  wallId              String
+  wall                Wall              @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  name                String
+  order               Int
+
+  widthM              Decimal           @db.Decimal(10, 2)
+  heightM             Decimal           @db.Decimal(10, 2)
+
+  projectCityImageId  String?
+  projectCityImage    ProjectCityImage? @relation(fields: [projectCityImageId], references: [id])
+  cityImageZoom       Float             @default(1)
+  cityImageOffsetX    Float             @default(0)
+  cityImageOffsetY    Float             @default(0)
+
+  projectGazinImageId String?
+  projectGazinImage   ProjectGazinImage? @relation(fields: [projectGazinImageId], references: [id])
+  gazinImageZoom      Float             @default(1)
+  gazinImageOffsetX   Float             @default(0)
+  gazinImageOffsetY   Float             @default(0)
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+}
+
+model CommunicationStatusHistory {
+  id              String              @id @default(uuid())
+
+  communicationId String
+  communication   Communication       @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  oldStatus       CommunicationStatus?
+  newStatus       CommunicationStatus
+
+  changedById     String
+  changedBy       User                @relation(fields: [changedById], references: [id])
+
+  comment         String?
+
+  createdAt       DateTime            @default(now())
+}
+
+enum ProjectImageStatus {
+  USED
+  AVAILABLE
+}
+
+model ProjectCityImage {
+  id              String             @id @default(uuid())
+  communicationId String
+  communication   Communication      @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  imageUrl        String
+  fileName        String?
+  authorName      String
+  creditText      String
+  status          ProjectImageStatus @default(AVAILABLE)
+
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  frames          Frame[]
+}
+
+model ProjectGazinImage {
+  id                  String             @id @default(uuid())
+  communicationId     String
+  communication       Communication      @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  gazinLibraryImageId String
+  gazinLibraryImage   GazinLibraryImage  @relation(fields: [gazinLibraryImageId], references: [id])
+
+  status              ProjectImageStatus @default(AVAILABLE)
+
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  frames              Frame[]
+
+  @@unique([communicationId, gazinLibraryImageId])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+
+  module      String
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String?
+  description String
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+}
