@@ -31,11 +31,13 @@ import {
   validateCommunication,
 } from "@/services/communications.service";
 import {
+  createCommunicationJpgZipJob,
+  createCommunicationPdfZipJob,
   type DownloadProgressInfo,
-  downloadCommunicationJpgZip,
-  downloadCommunicationPdf,
+  downloadExportJob,
   downloadFrameJpg,
   downloadFramePdf,
+  getExportJob,
 } from "@/services/exports.service";
 import {
   deleteFrame,
@@ -131,6 +133,7 @@ type DownloadProgressState = {
   percent: number;
   loadedBytes: number;
   totalBytes: number | null;
+  metaLabel?: string;
 };
 
 const communicationStatusLabelMap: Record<CommunicationStatus, string> = {
@@ -318,11 +321,13 @@ export default function CommunicationDetailsPage() {
       : "Finalizar esta comunicacao";
   const downloadPercent = downloadProgress?.percent ?? 0;
   const downloadRemainingPercent = Math.max(0, 100 - downloadPercent);
-  const downloadProgressMeta = downloadProgress?.totalBytes
-    ? `${formatFileSize(downloadProgress.loadedBytes)} de ${formatFileSize(downloadProgress.totalBytes)} baixados`
-    : downloadProgress?.loadedBytes
-      ? `${formatFileSize(downloadProgress.loadedBytes)} baixados`
-      : "Preparando o arquivo para download...";
+  const downloadProgressMeta =
+    downloadProgress?.metaLabel ??
+    (downloadProgress?.totalBytes
+      ? `${formatFileSize(downloadProgress.loadedBytes)} de ${formatFileSize(downloadProgress.totalBytes)} baixados`
+      : downloadProgress?.loadedBytes
+        ? `${formatFileSize(downloadProgress.loadedBytes)} baixados`
+        : "Preparando o arquivo para download...");
   const divergenceCommentCount = divergenceComment.length;
   const validatedSummary = summary?.communication.validatedAt
     ? `Validada em ${formatDateTime(summary.communication.validatedAt)}${
@@ -516,6 +521,7 @@ export default function CommunicationDetailsPage() {
       percent: 0,
       loadedBytes: 0,
       totalBytes: null,
+      metaLabel: undefined,
     });
   }
 
@@ -530,6 +536,7 @@ export default function CommunicationDetailsPage() {
       percent: Math.min(Math.max(progress.percent, 0), 100),
       loadedBytes: progress.loadedBytes,
       totalBytes: progress.totalBytes,
+      metaLabel: undefined,
     });
   }
 
@@ -545,6 +552,47 @@ export default function CommunicationDetailsPage() {
 
     await new Promise((resolve) => window.setTimeout(resolve, 180));
     setDownloadProgress(null);
+  }
+
+  async function waitForExportJob(
+    jobId: string,
+    format: "jpg" | "pdf",
+    totalFramesHint: number,
+  ) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < 1000 * 60 * 15) {
+      const job = await getExportJob(jobId);
+
+      if (job.status === "failed") {
+        throw new Error(
+          job.errorMessage || "Não foi possível gerar o arquivo para download.",
+        );
+      }
+
+      if (job.status === "completed") {
+        return job;
+      }
+
+      const totalFrames = Math.max(job.totalFrames || totalFramesHint || 0, 1);
+      const completedFrames = Math.min(job.completedFrames || 0, totalFrames);
+
+      setDownloadProgress({
+        title:
+          format === "jpg" ? "Gerando ZIP dos JPGs" : "Gerando ZIP dos PDFs",
+        description: job.currentFrameName
+          ? `Gerando ${job.currentFrameName} (${completedFrames}/${totalFrames})`
+          : `Gerando ${completedFrames} de ${totalFrames} quadro(s)`,
+        percent: Math.round((completedFrames / totalFrames) * 100),
+        loadedBytes: completedFrames,
+        totalBytes: totalFrames,
+        metaLabel: `${completedFrames} de ${totalFrames} quadro(s) gerado(s)`,
+      });
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+
+    throw new Error("A geração do arquivo demorou mais do que o esperado.");
   }
 
   async function handleCreateWall() {
@@ -617,10 +665,10 @@ export default function CommunicationDetailsPage() {
     } catch (error) {
       setModal({
         title: "Não foi possível redistribuir os quadros",
-        description: getApiErrorMessage(
-          error,
-          "Tente novamente em alguns instantes.",
-        ),
+        description:
+          error instanceof Error
+            ? error.message
+            : getApiErrorMessage(error, "Tente novamente em alguns instantes."),
       });
     } finally {
       setIsSaving(false);
@@ -637,20 +685,34 @@ export default function CommunicationDetailsPage() {
         ? "Aguarde o arquivo ZIP com todos os JPGs chegar a 100%."
         : "Aguarde o arquivo ZIP com todos os PDFs chegar a 100%.";
     setDownloadState(nextState);
-    openDownloadProgress(title, description);
+    setDownloadProgress({
+      title:
+        format === "jpg" ? "Gerando ZIP dos JPGs" : "Gerando ZIP dos PDFs",
+      description: "Preparando os quadros para exportação...",
+      percent: 0,
+      loadedBytes: 0,
+      totalBytes: summary?.communication.totalFrames ?? null,
+      metaLabel: summary?.communication.totalFrames
+        ? `0 de ${summary.communication.totalFrames} quadro(s) gerado(s)`
+        : "Preparando os quadros para exportacao...",
+    });
 
     try {
-      if (format === "jpg") {
-        await downloadCommunicationJpgZip(communicationId, {
-          onProgress: (progress) =>
-            handleDownloadProgress(title, description, progress),
-        });
-      } else {
-        await downloadCommunicationPdf(communicationId, {
-          onProgress: (progress) =>
-            handleDownloadProgress(title, description, progress),
-        });
-      }
+      const createdJob =
+        format === "jpg"
+          ? await createCommunicationJpgZipJob(communicationId)
+          : await createCommunicationPdfZipJob(communicationId);
+      const completedJob = await waitForExportJob(
+        createdJob.id,
+        format,
+        createdJob.totalFrames,
+      );
+
+      openDownloadProgress(title, description);
+      await downloadExportJob(completedJob.id, completedJob.fileName, {
+        onProgress: (progress) =>
+          handleDownloadProgress(title, description, progress),
+      });
       await finishDownloadProgress();
     } catch (error) {
       setDownloadProgress(null);

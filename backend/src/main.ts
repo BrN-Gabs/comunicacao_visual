@@ -6,6 +6,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
+  const allowTryCloudflare =
+    (process.env.CORS_ALLOW_TRYCLOUDFLARE ?? 'false').toLowerCase() === 'true';
   const allowedOrigins = new Set(
     (
       process.env.CORS_ORIGINS ??
@@ -25,7 +27,9 @@ async function bootstrap() {
       if (
         !origin ||
         allowedOrigins.has(origin) ||
-        /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+        /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ||
+        (allowTryCloudflare &&
+          /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(origin))
       ) {
         callback(null, true);
         return;

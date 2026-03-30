@@ -105,7 +105,8 @@ function loadTemplate(): CommunicationFrameTemplate {
     backgroundColor: '#97D1F3',
     placeholderColor: '#1D1D1B',
     labelColor: '#6098BE',
-    labelFontFamily: "'Montserrat Black', 'Montserrat', Arial, sans-serif",
+    labelFontFamily:
+      "'DejaVu Sans', 'Liberation Sans', Arial, Helvetica, sans-serif",
     labelFontWeight: '900',
     borderPath,
     cityPath,

@@ -21,6 +21,11 @@ import { getStoredUser } from "@/lib/auth";
 import { subscribeToAppRefresh } from "@/lib/app-refresh";
 import { hasRoleAccess } from "@/lib/role-access";
 import {
+  formatFileSize,
+  getImageUploadSizeError,
+  MAX_IMAGE_UPLOAD_SIZE_LABEL,
+} from "@/lib/upload";
+import {
   createGazinLibraryImage,
   deleteGazinLibraryImage,
   listGazinLibraryImages,
@@ -64,14 +69,6 @@ const emptyForm: GazinLibraryFormState = {
   description: "",
   imageUrl: "",
 };
-
-function formatFileSize(bytes: number) {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
 
 function isValidHttpUrl(value: string) {
   try {
@@ -159,6 +156,24 @@ export default function GazinLibraryPage() {
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  }
+
+  function handleSelectedFileChange(nextFile: File | null) {
+    if (!nextFile) {
+      clearSelectedFile();
+      return;
+    }
+
+    const fileSizeError = getImageUploadSizeError([nextFile]);
+
+    if (fileSizeError) {
+      clearSelectedFile();
+      setFormError(fileSizeError);
+      return;
+    }
+
+    setFormError("");
+    setSelectedFile(nextFile);
   }
 
   function openErrorModal(title: string, message: string) {
@@ -316,6 +331,16 @@ export default function GazinLibraryPage() {
       setFormError("Selecione uma imagem da Gazin para editar.");
       setIsSubmitting(false);
       return;
+    }
+
+    if (selectedFile) {
+      const fileSizeError = getImageUploadSizeError([selectedFile]);
+
+      if (fileSizeError) {
+        setFormError(fileSizeError);
+        setIsSubmitting(false);
+        return;
+      }
     }
 
     try {
@@ -947,7 +972,7 @@ export default function GazinLibraryPage() {
                           {selectedFile
                             ? `${formatFileSize(selectedFile?.size ?? 0)} • pronto para envio`
                             : formMode === "create"
-                              ? "Envie JPG, PNG ou WebP com até 15 MB."
+                              ? `Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL}.`
                               : "Opcional. Envie um novo arquivo apenas se quiser substituir o atual."}
                         </span>
                       </div>
@@ -1159,16 +1184,16 @@ export default function GazinLibraryPage() {
                     : "Substituir arquivo (opcional)"}
                 </span>
 
-                <input
-                  ref={fileInputRef}
-                  id="gazin-library-file-input-modal"
-                  className="file-input-native"
-                  type="file"
-                  accept="image/*"
-                  onChange={(event) =>
-                    setSelectedFile(event.target.files?.[0] ?? null)
-                  }
-                />
+                  <input
+                    ref={fileInputRef}
+                    id="gazin-library-file-input-modal"
+                    className="file-input-native"
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) =>
+                      handleSelectedFileChange(event.target.files?.[0] ?? null)
+                    }
+                  />
 
                 <div
                   className={`file-picker ${selectedFile ? "is-selected" : ""}`}
@@ -1190,7 +1215,7 @@ export default function GazinLibraryPage() {
                           {selectedFile
                             ? `${formatFileSize(selectedFile?.size ?? 0)} - pronto para envio`
                             : formMode === "create"
-                              ? "Envie JPG, PNG ou WebP com até 15 MB."
+                              ? `Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL}.`
                               : "Opcional. Envie um novo arquivo apenas se quiser substituir o atual."}
                       </span>
                     </div>

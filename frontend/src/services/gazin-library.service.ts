@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { IMAGE_UPLOAD_REQUEST_TIMEOUT_MS } from "@/lib/upload";
 import type {
   CreateGazinLibraryImagePayload,
   GazinLibraryImage,
@@ -43,6 +44,7 @@ export async function uploadGazinLibraryImage(
         title: payload.title,
         description: payload.description,
       },
+      timeout: IMAGE_UPLOAD_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -68,6 +70,9 @@ export async function reuploadGazinLibraryImage(id: string, file: File) {
   const { data } = await api.patch<GazinLibraryImage>(
     `/gazin-library/${id}/reupload`,
     formData,
+    {
+      timeout: IMAGE_UPLOAD_REQUEST_TIMEOUT_MS,
+    },
   );
 
   return data;

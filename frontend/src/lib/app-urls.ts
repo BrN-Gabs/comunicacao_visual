@@ -1,6 +1,6 @@
 export const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ??
-  "http://localhost:3000/api";
+  "/api";
 
 export const apiAssetBaseUrl = apiBaseUrl.replace(/\/api$/, "");
 

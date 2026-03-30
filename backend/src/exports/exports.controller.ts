@@ -1,5 +1,14 @@
-import { Controller, Get, Param, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Res,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { createReadStream } from 'fs';
 import { ExportsService } from './exports.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -85,5 +94,42 @@ export class ExportsController {
     this.setDownloadHeaders(res, file);
 
     return res.send(file.buffer);
+  }
+
+  @Post('communications/:id/jpg-zip-jobs')
+  createCommunicationJpgZipJob(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+  ) {
+    return this.exportsService.createCommunicationZipJob(id, user, 'jpg');
+  }
+
+  @Post('communications/:id/pdf-zip-jobs')
+  createCommunicationPdfZipJob(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+  ) {
+    return this.exportsService.createCommunicationZipJob(id, user, 'pdf');
+  }
+
+  @Get('jobs/:jobId')
+  getExportJob(
+    @Param('jobId') jobId: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+  ) {
+    return this.exportsService.getExportJob(jobId, user);
+  }
+
+  @Get('jobs/:jobId/download')
+  downloadExportJob(
+    @Param('jobId') jobId: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const file = this.exportsService.getExportJobDownload(jobId, user);
+
+    this.setDownloadHeaders(res, file);
+
+    return new StreamableFile(createReadStream(file.filePath));
   }
 }

@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { IMAGE_UPLOAD_REQUEST_TIMEOUT_MS } from "@/lib/upload";
 import type { ProjectCityImage } from "@/types/communication";
 
 export async function listCommunicationCityImages(communicationId: string) {
@@ -27,6 +28,7 @@ export async function uploadCommunicationCityImages(
       params: {
         authorName,
       },
+      timeout: IMAGE_UPLOAD_REQUEST_TIMEOUT_MS,
     },
   );
 

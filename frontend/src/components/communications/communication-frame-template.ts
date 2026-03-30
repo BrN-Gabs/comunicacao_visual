@@ -6,7 +6,8 @@ export const communicationFrameTemplate = {
   backgroundColor: "#97D1F3",
   placeholderColor: "#1D1D1B",
   labelColor: "#6098BE",
-  labelFontFamily: "'Montserrat Black', 'Montserrat', Arial, sans-serif",
+  labelFontFamily:
+    "'DejaVu Sans', 'Liberation Sans', Arial, Helvetica, sans-serif",
   labelFontWeight: "900",
   cityPath:
     "M1609.7,0L510.6,2086.7c-127.9,242.8,48.2,534.6,322.6,534.6h4893.7L7096.9,0H1609.7Z",

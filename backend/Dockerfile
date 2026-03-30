@@ -4,7 +4,12 @@ WORKDIR /app
 ARG DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gazin_visual
 ENV DATABASE_URL=$DATABASE_URL
 
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y \
+  fontconfig \
+  fonts-dejavu-core \
+  fonts-liberation2 \
+  openssl \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm ci
@@ -27,7 +32,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y \
+  fontconfig \
+  fonts-dejavu-core \
+  fonts-liberation2 \
+  openssl \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 COPY --from=deps /app/node_modules ./node_modules

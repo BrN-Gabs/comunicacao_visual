@@ -5,7 +5,16 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { fileUrlToAbsolutePath } from '../common/upload/file-path.utils';
-import { existsSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from 'fs';
+import { writeFile } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { join } from 'path';
 import sharp from 'sharp';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
@@ -75,8 +84,38 @@ type ExportableCommunication = {
   }>;
 };
 
+type ExportJobFormat = 'jpg' | 'pdf';
+type ExportJobStatus = 'processing' | 'completed' | 'failed';
+
+type ExportJobRecord = {
+  id: string;
+  userId: string;
+  communicationId: string;
+  communicationLabel: string;
+  format: ExportJobFormat;
+  status: ExportJobStatus;
+  fileName: string;
+  mimeType: string;
+  filePath: string;
+  totalFrames: number;
+  completedFrames: number;
+  currentFrameName: string | null;
+  errorMessage: string | null;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+};
+
 @Injectable()
 export class ExportsService {
+  private readonly exportJobs = new Map<string, ExportJobRecord>();
+  private readonly exportJobsFolder = join(
+    process.cwd(),
+    'uploads',
+    'exports-cache',
+  );
+  private readonly exportJobTtlMs = 1000 * 60 * 60;
+
   constructor(
     private prisma: PrismaService,
     private auditLogsService: AuditLogsService,
@@ -149,23 +188,10 @@ export class ExportsService {
       );
     }
 
-    const zip = new JSZip();
-
-    for (const wall of communication.walls) {
-      const readyFrames = wall.frames.filter(
-        (frame): frame is ExportableReadyFrame => this.isReadyFrame(frame),
-      );
-
-      for (const frame of readyFrames) {
-        const jpgBuffer = await this.renderFrameJpgBuffer(frame);
-        zip.file(
-          this.buildCommunicationZipPath(wall.order, frame, 'jpg'),
-          jpgBuffer,
-        );
-      }
-    }
-
-    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const zipBuffer = await this.buildCommunicationZipBuffer(
+      communication,
+      'jpg',
+    );
 
     await this.auditLogsService.create({
       userId: user.id,
@@ -253,23 +279,10 @@ export class ExportsService {
       );
     }
 
-    const zip = new JSZip();
-
-    for (const wall of communication.walls) {
-      const readyFrames = wall.frames.filter(
-        (frame): frame is ExportableReadyFrame => this.isReadyFrame(frame),
-      );
-
-      for (const frame of readyFrames) {
-        const pdfBuffer = await this.renderFramePdfBuffer(frame);
-        zip.file(
-          this.buildCommunicationZipPath(wall.order, frame, 'pdf'),
-          pdfBuffer,
-        );
-      }
-    }
-
-    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+    const zipBuffer = await this.buildCommunicationZipBuffer(
+      communication,
+      'pdf',
+    );
 
     await this.auditLogsService.create({
       userId: user.id,
@@ -288,6 +301,108 @@ export class ExportsService {
       fileName: `${this.slugify(communication.fullName)}-quadros-pdf.zip`,
       mimeType: 'application/zip',
       buffer: zipBuffer,
+    };
+  }
+
+  async createCommunicationZipJob(
+    communicationId: string,
+    user: CurrentUser,
+    format: ExportJobFormat,
+  ) {
+    this.cleanupExpiredExportJobs();
+
+    const communication = await this.getCommunicationForExport(
+      communicationId,
+      user,
+    );
+    const frames = this.flattenFrames(communication);
+
+    if (frames.length === 0) {
+      throw new BadRequestException(
+        'A comunicaÃ§Ã£o nÃ£o possui quadros para exportaÃ§Ã£o',
+      );
+    }
+
+    this.ensureExportJobsFolder();
+
+    const jobId = randomUUID();
+    const record: ExportJobRecord = {
+      id: jobId,
+      userId: user.id,
+      communicationId: communication.id,
+      communicationLabel: communication.fullName,
+      format,
+      status: 'processing',
+      fileName:
+        format === 'jpg'
+          ? `${this.slugify(communication.fullName)}-quadros.zip`
+          : `${this.slugify(communication.fullName)}-quadros-pdf.zip`,
+      mimeType: 'application/zip',
+      filePath: join(this.exportJobsFolder, `${jobId}.zip`),
+      totalFrames: frames.length,
+      completedFrames: 0,
+      currentFrameName: null,
+      errorMessage: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + this.exportJobTtlMs,
+    };
+
+    this.exportJobs.set(jobId, record);
+    void this.runCommunicationZipJob(record, communication, user);
+
+    return this.toPublicExportJob(record);
+  }
+
+  getExportJob(jobId: string, user: CurrentUser) {
+    this.cleanupExpiredExportJobs();
+
+    const record = this.exportJobs.get(jobId);
+
+    if (!record) {
+      throw new NotFoundException('ExportaÃ§Ã£o nÃ£o encontrada');
+    }
+
+    if (record.userId !== user.id && user.role !== 'ADMIN') {
+      throw new BadRequestException(
+        'VocÃª nÃ£o tem permissÃ£o para consultar esta exportaÃ§Ã£o',
+      );
+    }
+
+    return this.toPublicExportJob(record);
+  }
+
+  getExportJobDownload(jobId: string, user: CurrentUser) {
+    this.cleanupExpiredExportJobs();
+
+    const record = this.exportJobs.get(jobId);
+
+    if (!record) {
+      throw new NotFoundException('ExportaÃ§Ã£o nÃ£o encontrada');
+    }
+
+    if (record.userId !== user.id && user.role !== 'ADMIN') {
+      throw new BadRequestException(
+        'VocÃª nÃ£o tem permissÃ£o para baixar esta exportaÃ§Ã£o',
+      );
+    }
+
+    if (record.status === 'failed') {
+      throw new BadRequestException(
+        record.errorMessage || 'A exportaÃ§Ã£o falhou e nÃ£o pode ser baixada',
+      );
+    }
+
+    if (record.status !== 'completed' || !existsSync(record.filePath)) {
+      throw new BadRequestException(
+        'A exportaÃ§Ã£o ainda estÃ¡ sendo gerada. Aguarde a conclusÃ£o.',
+      );
+    }
+
+    return {
+      fileName: record.fileName,
+      mimeType: record.mimeType,
+      filePath: record.filePath,
     };
   }
 
@@ -466,6 +581,54 @@ export class ExportsService {
         this.isReadyFrame(frame),
       ),
     );
+  }
+
+  private async buildCommunicationZipBuffer(
+    communication: ExportableCommunication,
+    format: ExportJobFormat,
+    onProgress?: (payload: {
+      completedFrames: number;
+      totalFrames: number;
+      currentFrameName: string;
+    }) => void,
+  ) {
+    const frames = this.flattenFrames(communication);
+
+    if (frames.length === 0) {
+      throw new BadRequestException(
+        'A comunicaÃ§Ã£o nÃ£o possui quadros para exportaÃ§Ã£o',
+      );
+    }
+
+    const zip = new JSZip();
+    let completedFrames = 0;
+
+    for (const wall of communication.walls) {
+      const readyFrames = wall.frames.filter(
+        (frame): frame is ExportableReadyFrame => this.isReadyFrame(frame),
+      );
+
+      for (const frame of readyFrames) {
+        const frameBuffer =
+          format === 'jpg'
+            ? await this.renderFrameJpgBuffer(frame)
+            : await this.renderFramePdfBuffer(frame);
+
+        zip.file(
+          this.buildCommunicationZipPath(wall.order, frame, format),
+          frameBuffer,
+        );
+
+        completedFrames += 1;
+        onProgress?.({
+          completedFrames,
+          totalFrames: frames.length,
+          currentFrameName: frame.name,
+        });
+      }
+    }
+
+    return zip.generateAsync({ type: 'nodebuffer' });
   }
 
   private isReadyFrame(frame: ExportableFrame): frame is ExportableReadyFrame {
@@ -703,6 +866,115 @@ export class ExportsService {
 
     const pdfBytes = await pdfDoc.save();
     return Buffer.from(pdfBytes);
+  }
+
+  private ensureExportJobsFolder() {
+    mkdirSync(this.exportJobsFolder, { recursive: true });
+  }
+
+  private cleanupExpiredExportJobs() {
+    const now = Date.now();
+
+    for (const [jobId, record] of this.exportJobs.entries()) {
+      if (record.expiresAt > now) {
+        continue;
+      }
+
+      if (existsSync(record.filePath)) {
+        unlinkSync(record.filePath);
+      }
+
+      this.exportJobs.delete(jobId);
+    }
+
+    if (!existsSync(this.exportJobsFolder)) {
+      return;
+    }
+
+    for (const fileName of readdirSync(this.exportJobsFolder)) {
+      const filePath = join(this.exportJobsFolder, fileName);
+      const stats = statSync(filePath);
+
+      if (now - stats.mtimeMs > this.exportJobTtlMs) {
+        unlinkSync(filePath);
+      }
+    }
+  }
+
+  private toPublicExportJob(record: ExportJobRecord) {
+    return {
+      id: record.id,
+      format: record.format,
+      status: record.status,
+      fileName: record.fileName,
+      communicationId: record.communicationId,
+      communicationLabel: record.communicationLabel,
+      totalFrames: record.totalFrames,
+      completedFrames: record.completedFrames,
+      currentFrameName: record.currentFrameName,
+      errorMessage: record.errorMessage,
+      createdAt: new Date(record.createdAt).toISOString(),
+      updatedAt: new Date(record.updatedAt).toISOString(),
+    };
+  }
+
+  private async runCommunicationZipJob(
+    record: ExportJobRecord,
+    communication: ExportableCommunication,
+    user: CurrentUser,
+  ) {
+    try {
+      const buffer = await this.buildCommunicationZipBuffer(
+        communication,
+        record.format,
+        ({ completedFrames, currentFrameName }) => {
+          const currentRecord = this.exportJobs.get(record.id);
+
+          if (!currentRecord) {
+            return;
+          }
+
+          currentRecord.completedFrames = completedFrames;
+          currentRecord.currentFrameName = currentFrameName;
+          currentRecord.updatedAt = Date.now();
+        },
+      );
+
+      await writeFile(record.filePath, buffer);
+
+      record.completedFrames = record.totalFrames;
+      record.currentFrameName = null;
+      record.status = 'completed';
+      record.updatedAt = Date.now();
+
+      await this.auditLogsService.create({
+        userId: user.id,
+        module: 'EXPORTS',
+        action:
+          record.format === 'jpg'
+            ? 'EXPORT_COMMUNICATION_JPG_ZIP'
+            : 'EXPORT_COMMUNICATION_PDF_ZIP',
+        entityType: 'COMMUNICATION',
+        entityId: communication.id,
+        entityLabel: communication.fullName,
+        description:
+          record.format === 'jpg'
+            ? 'ComunicaÃ§Ã£o exportada em ZIP com JPGs'
+            : 'ComunicaÃ§Ã£o exportada em ZIP com PDFs',
+        metadata: {
+          totalFrames: record.totalFrames,
+          exportJobId: record.id,
+        },
+      });
+    } catch (error) {
+      record.status = 'failed';
+      record.updatedAt = Date.now();
+      record.currentFrameName = null;
+      record.errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'NÃ£o foi possÃ­vel gerar a exportaÃ§Ã£o.';
+    }
   }
 
   private buildFrameFileName(

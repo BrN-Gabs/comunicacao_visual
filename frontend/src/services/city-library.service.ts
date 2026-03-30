@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { IMAGE_UPLOAD_REQUEST_TIMEOUT_MS } from "@/lib/upload";
 import type {
   CityLibraryCitiesListParams,
   CityLibraryCitiesListResponse,
@@ -94,9 +95,7 @@ export async function uploadCityPhotographerImages(
     `/city-library/photographers/${photographerId}/images/upload`,
     formData,
     {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
+      timeout: IMAGE_UPLOAD_REQUEST_TIMEOUT_MS,
     },
   );
 
@@ -108,9 +107,7 @@ export async function reuploadCityLibraryImage(id: string, file: File) {
   formData.append("file", file);
 
   const { data } = await api.patch(`/city-library/images/${id}/reupload`, formData, {
-    headers: {
-      "Content-Type": "multipart/form-data",
-    },
+    timeout: IMAGE_UPLOAD_REQUEST_TIMEOUT_MS,
   });
 
   return data;

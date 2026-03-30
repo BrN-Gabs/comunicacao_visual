@@ -20,6 +20,13 @@ import { getApiErrorMessage } from "@/lib/api-error";
 import { subscribeToAppRefresh } from "@/lib/app-refresh";
 import { hasRoleAccess } from "@/lib/role-access";
 import {
+  getBatchImageUploadSizeError,
+  formatFileSize,
+  getImageUploadSizeError,
+  MAX_BATCH_IMAGE_UPLOAD_SIZE_LABEL,
+  MAX_IMAGE_UPLOAD_SIZE_LABEL,
+} from "@/lib/upload";
+import {
   createCityLibraryCity,
   createCityPhotographer,
   deleteCityLibraryCity,
@@ -45,14 +52,6 @@ type CityLibraryModalState =
   | { type: "confirm-delete-image"; image: CityLibraryImage }
   | { type: "error"; title: string; message: string }
   | null;
-
-function formatFileSize(bytes: number) {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
 
 export default function CityLibraryPage() {
   const router = useRouter();
@@ -235,6 +234,27 @@ export default function CityLibraryPage() {
     if (uploadInputRef.current) {
       uploadInputRef.current.value = "";
     }
+  }
+
+  function handleSelectedFilesChange(files: File[]) {
+    const fileSizeError = getImageUploadSizeError(files);
+
+    if (fileSizeError) {
+      clearSelectedFiles();
+      setImagesError(fileSizeError);
+      return;
+    }
+
+    const batchSizeError = getBatchImageUploadSizeError(files);
+
+    if (batchSizeError) {
+      clearSelectedFiles();
+      setImagesError(batchSizeError);
+      return;
+    }
+
+    setImagesError("");
+    setSelectedFiles(files);
   }
 
   function openErrorModal(title: string, message: string) {
@@ -425,6 +445,20 @@ export default function CityLibraryPage() {
 
     if (!selectedFiles.length) {
       setImagesError("Selecione pelo menos um arquivo de imagem.");
+      return;
+    }
+
+    const fileSizeError = getImageUploadSizeError(selectedFiles);
+
+    if (fileSizeError) {
+      setImagesError(fileSizeError);
+      return;
+    }
+
+    const batchSizeError = getBatchImageUploadSizeError(selectedFiles);
+
+    if (batchSizeError) {
+      setImagesError(batchSizeError);
       return;
     }
 
@@ -1013,7 +1047,7 @@ export default function CityLibraryPage() {
             accept="image/*"
             multiple
             onChange={(event) =>
-              setSelectedFiles(Array.from(event.target.files || []))
+              handleSelectedFilesChange(Array.from(event.target.files || []))
             }
           />
 
@@ -1028,7 +1062,9 @@ export default function CityLibraryPage() {
                     ? `${selectedFiles.length} arquivo(s) selecionado(s)`
                     : "Selecione as imagens da cidade"}
                 </strong>
-                <span>Envie JPG, PNG ou WebP com até 15 MB por arquivo.</span>
+                <span>
+                  {`Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL} por arquivo e ${MAX_BATCH_IMAGE_UPLOAD_SIZE_LABEL} por envio.`}
+                </span>
               </div>
             </div>
 

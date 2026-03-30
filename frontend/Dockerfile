@@ -7,8 +7,10 @@ RUN npm ci
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
-ARG NEXT_PUBLIC_API_URL=http://localhost:3000/api
+ARG NEXT_PUBLIC_API_URL=/api
+ARG INTERNAL_API_URL=http://backend:3000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV INTERNAL_API_URL=$INTERNAL_API_URL
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -19,6 +21,8 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV NEXT_PUBLIC_API_URL=/api
+ENV INTERNAL_API_URL=http://backend:3000
 
 COPY package*.json ./
 COPY --from=deps /app/node_modules ./node_modules

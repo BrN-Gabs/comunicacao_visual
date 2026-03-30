@@ -7,6 +7,21 @@ export type DownloadProgressInfo = {
   totalBytes: number | null;
 };
 
+export type ExportJobInfo = {
+  id: string;
+  format: "jpg" | "pdf";
+  status: "processing" | "completed" | "failed";
+  fileName: string;
+  communicationId: string;
+  communicationLabel: string;
+  totalFrames: number;
+  completedFrames: number;
+  currentFrameName: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type DownloadFileOptions = {
   onProgress?: (info: DownloadProgressInfo) => void;
 };
@@ -113,6 +128,35 @@ export async function downloadCommunicationJpgZip(
     `${communicationId}-quadros.zip`,
     options,
   );
+}
+
+export async function createCommunicationJpgZipJob(communicationId: string) {
+  const { data } = await api.post<ExportJobInfo>(
+    `/exports/communications/${communicationId}/jpg-zip-jobs`,
+  );
+
+  return data;
+}
+
+export async function createCommunicationPdfZipJob(communicationId: string) {
+  const { data } = await api.post<ExportJobInfo>(
+    `/exports/communications/${communicationId}/pdf-zip-jobs`,
+  );
+
+  return data;
+}
+
+export async function getExportJob(jobId: string) {
+  const { data } = await api.get<ExportJobInfo>(`/exports/jobs/${jobId}`);
+  return data;
+}
+
+export async function downloadExportJob(
+  jobId: string,
+  fallbackFileName: string,
+  options?: DownloadFileOptions,
+) {
+  await downloadFile(`/exports/jobs/${jobId}/download`, fallbackFileName, options);
 }
 
 export async function downloadCommunicationPdf(
