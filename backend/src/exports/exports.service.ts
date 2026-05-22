@@ -12,8 +12,8 @@ import {
   statSync,
   unlinkSync,
 } from 'fs';
-import { writeFile } from 'fs/promises';
-import { randomUUID } from 'crypto';
+import { readFile, writeFile } from 'fs/promises';
+import { createHash, randomUUID } from 'crypto';
 import { join } from 'path';
 import sharp from 'sharp';
 import { PDFDocument } from 'pdf-lib';
@@ -25,6 +25,8 @@ type CurrentUser = {
   id: string;
   role: 'ADMIN' | 'VIP' | 'NORMAL';
 };
+
+type SharpImageInput = string | Buffer;
 
 type ExportableFrame = {
   id: string;
@@ -109,12 +111,23 @@ type ExportJobRecord = {
 @Injectable()
 export class ExportsService {
   private readonly exportJobs = new Map<string, ExportJobRecord>();
+  private readonly renderedFrameBuilds = new Map<string, Promise<Buffer>>();
+  private readonly externalImageCache = new Map<
+    string,
+    { expiresAt: number; promise: Promise<Buffer> }
+  >();
   private readonly exportJobsFolder = join(
     process.cwd(),
     'uploads',
     'exports-cache',
   );
+  private readonly renderedFramesFolder = join(
+    this.exportJobsFolder,
+    'rendered-frames',
+  );
   private readonly exportJobTtlMs = 1000 * 60 * 60;
+  private readonly renderedFrameCacheTtlMs = 1000 * 60 * 60 * 24 * 7;
+  private readonly externalImageCacheTtlMs = 1000 * 60 * 15;
 
   constructor(
     private prisma: PrismaService,
@@ -173,6 +186,42 @@ export class ExportsService {
       mimeType: 'application/pdf',
       buffer: pdfBuffer,
     };
+  }
+
+  async createFrameExportJob(
+    frameId: string,
+    user: CurrentUser,
+    format: ExportJobFormat,
+  ) {
+    this.cleanupExpiredExportJobs();
+
+    const frame = await this.getFrameForExport(frameId, user);
+    this.ensureExportJobsFolder();
+
+    const jobId = randomUUID();
+    const record: ExportJobRecord = {
+      id: jobId,
+      userId: user.id,
+      communicationId: frame.wall.communication.id,
+      communicationLabel: frame.wall.communication.fullName,
+      format,
+      status: 'processing',
+      fileName: this.buildFrameFileName(frame, format),
+      mimeType: format === 'jpg' ? 'image/jpeg' : 'application/pdf',
+      filePath: join(this.exportJobsFolder, `${jobId}.${format}`),
+      totalFrames: 1,
+      completedFrames: 0,
+      currentFrameName: frame.name,
+      errorMessage: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + this.exportJobTtlMs,
+    };
+
+    this.exportJobs.set(jobId, record);
+    void this.runFrameExportJob(record, frame, user);
+
+    return this.toPublicExportJob(record);
   }
 
   async exportCommunicationJpgZip(communicationId: string, user: CurrentUser) {
@@ -275,7 +324,7 @@ export class ExportsService {
 
     if (frames.length === 0) {
       throw new BadRequestException(
-        'A comunicaÃ§Ã£o nÃ£o possui quadros para exportaÃ§Ã£o',
+        'A comunicação não possui quadros para exportação',
       );
     }
 
@@ -291,7 +340,7 @@ export class ExportsService {
       entityType: 'COMMUNICATION',
       entityId: communication.id,
       entityLabel: communication.fullName,
-      description: 'ComunicaÃ§Ã£o exportada em ZIP com PDFs',
+      description: 'Comunicação exportada em ZIP com PDFs',
       metadata: {
         totalFrames: frames.length,
       },
@@ -319,7 +368,7 @@ export class ExportsService {
 
     if (frames.length === 0) {
       throw new BadRequestException(
-        'A comunicaÃ§Ã£o nÃ£o possui quadros para exportaÃ§Ã£o',
+        'A comunicação não possui quadros para exportação',
       );
     }
 
@@ -360,12 +409,12 @@ export class ExportsService {
     const record = this.exportJobs.get(jobId);
 
     if (!record) {
-      throw new NotFoundException('ExportaÃ§Ã£o nÃ£o encontrada');
+      throw new NotFoundException('Exportação não encontrada');
     }
 
     if (record.userId !== user.id && user.role !== 'ADMIN') {
       throw new BadRequestException(
-        'VocÃª nÃ£o tem permissÃ£o para consultar esta exportaÃ§Ã£o',
+        'Você não tem permissão para consultar esta exportação',
       );
     }
 
@@ -378,24 +427,24 @@ export class ExportsService {
     const record = this.exportJobs.get(jobId);
 
     if (!record) {
-      throw new NotFoundException('ExportaÃ§Ã£o nÃ£o encontrada');
+      throw new NotFoundException('Exportação não encontrada');
     }
 
     if (record.userId !== user.id && user.role !== 'ADMIN') {
       throw new BadRequestException(
-        'VocÃª nÃ£o tem permissÃ£o para baixar esta exportaÃ§Ã£o',
+        'Você não tem permissão para baixar esta exportação',
       );
     }
 
     if (record.status === 'failed') {
       throw new BadRequestException(
-        record.errorMessage || 'A exportaÃ§Ã£o falhou e nÃ£o pode ser baixada',
+        record.errorMessage || 'A exportação falhou e não pode ser baixada',
       );
     }
 
     if (record.status !== 'completed' || !existsSync(record.filePath)) {
       throw new BadRequestException(
-        'A exportaÃ§Ã£o ainda estÃ¡ sendo gerada. Aguarde a conclusÃ£o.',
+        'A exportação ainda está sendo gerada. Aguarde a conclusão.',
       );
     }
 
@@ -403,6 +452,7 @@ export class ExportsService {
       fileName: record.fileName,
       mimeType: record.mimeType,
       filePath: record.filePath,
+      sizeBytes: statSync(record.filePath).size,
     };
   }
 
@@ -596,26 +646,35 @@ export class ExportsService {
 
     if (frames.length === 0) {
       throw new BadRequestException(
-        'A comunicaÃ§Ã£o nÃ£o possui quadros para exportaÃ§Ã£o',
+        'A comunicação não possui quadros para exportação',
       );
     }
 
     const zip = new JSZip();
+    const entries = communication.walls.flatMap((wall) =>
+      wall.frames
+        .filter((frame): frame is ExportableReadyFrame => this.isReadyFrame(frame))
+        .map((frame) => ({ wallOrder: wall.order, frame })),
+    );
     let completedFrames = 0;
+    let nextEntryIndex = 0;
 
-    for (const wall of communication.walls) {
-      const readyFrames = wall.frames.filter(
-        (frame): frame is ExportableReadyFrame => this.isReadyFrame(frame),
-      );
+    const renderNextEntry = async () => {
+      while (nextEntryIndex < entries.length) {
+        const entry = entries[nextEntryIndex];
+        nextEntryIndex += 1;
 
-      for (const frame of readyFrames) {
         const frameBuffer =
           format === 'jpg'
-            ? await this.renderFrameJpgBuffer(frame)
-            : await this.renderFramePdfBuffer(frame);
+            ? await this.renderFrameJpgBuffer(entry.frame)
+            : await this.renderFramePdfBuffer(entry.frame);
 
         zip.file(
-          this.buildCommunicationZipPath(wall.order, frame, format),
+          this.buildCommunicationZipPath(
+            entry.wallOrder,
+            entry.frame,
+            format,
+          ),
           frameBuffer,
         );
 
@@ -623,10 +682,15 @@ export class ExportsService {
         onProgress?.({
           completedFrames,
           totalFrames: frames.length,
-          currentFrameName: frame.name,
+          currentFrameName: entry.frame.name,
         });
       }
-    }
+    };
+
+    const workerCount = Math.min(entries.length, 2);
+    await Promise.all(
+      Array.from({ length: workerCount }, () => renderNextEntry()),
+    );
 
     return zip.generateAsync({ type: 'nodebuffer' });
   }
@@ -636,6 +700,12 @@ export class ExportsService {
   }
 
   private async renderFrameJpgBuffer(frame: ExportableReadyFrame) {
+    return this.readOrBuildFrameRender(frame, 'jpg', () =>
+      this.renderFrameJpgBufferUncached(frame),
+    );
+  }
+
+  private async renderFrameJpgBufferUncached(frame: ExportableReadyFrame) {
     const communicationFrameTemplate = getCommunicationFrameTemplate();
     const numericWidth = Number(frame.widthM);
     const numericHeight = Number(frame.heightM);
@@ -654,20 +724,16 @@ export class ExportsService {
     const safeWidth = Math.max(Math.round(widthPx * exportScale), minWidth);
     const safeHeight = Math.max(Math.round(heightPx * exportScale), minHeight);
 
-    const cityImagePath = fileUrlToAbsolutePath(
-      frame.projectCityImage.imageUrl,
-    );
-    const gazinImagePath = fileUrlToAbsolutePath(
-      frame.projectGazinImage.gazinLibraryImage.imageUrl,
-    );
-
-    if (!existsSync(cityImagePath)) {
-      throw new NotFoundException('Arquivo da imagem da cidade não encontrado');
-    }
-
-    if (!existsSync(gazinImagePath)) {
-      throw new NotFoundException('Arquivo da imagem da Gazin não encontrado');
-    }
+    const [cityImageInput, gazinImageInput] = await Promise.all([
+      this.resolveImageInput(
+        frame.projectCityImage.imageUrl,
+        'Arquivo da imagem da cidade não encontrado',
+      ),
+      this.resolveImageInput(
+        frame.projectGazinImage.gazinLibraryImage.imageUrl,
+        'Arquivo da imagem da Gazin não encontrado',
+      ),
+    ]);
 
     const { cityBounds, gazinBounds, cityLabel, gazinLabel, viewBox } =
       communicationFrameTemplate;
@@ -737,17 +803,21 @@ export class ExportsService {
       offsetX: frame.gazinImageOffsetX,
       offsetY: frame.gazinImageOffsetY,
     });
+    const cityImageSize = this.buildEmbeddedImageSize(cityImagePlacement);
+    const gazinImageSize = this.buildEmbeddedImageSize(gazinImagePlacement);
 
-    const cityImageDataUri = await this.buildImageDataUri(
-      cityImagePath,
-      Math.max(Math.round(cityImagePlacement.width), 1800),
-      Math.max(Math.round(cityImagePlacement.height), 1000),
-    );
-    const gazinImageDataUri = await this.buildImageDataUri(
-      gazinImagePath,
-      Math.max(Math.round(gazinImagePlacement.width), 1800),
-      Math.max(Math.round(gazinImagePlacement.height), 1000),
-    );
+    const [cityImageDataUri, gazinImageDataUri] = await Promise.all([
+      this.buildImageDataUri(
+        cityImageInput,
+        cityImageSize.width,
+        cityImageSize.height,
+      ),
+      this.buildImageDataUri(
+        gazinImageInput,
+        gazinImageSize.width,
+        gazinImageSize.height,
+      ),
+    ]);
 
     const svg = `
       <svg width="${safeWidth}" height="${safeHeight}" viewBox="0 0 ${safeWidth} ${safeHeight}" xmlns="http://www.w3.org/2000/svg">
@@ -843,11 +913,17 @@ export class ExportsService {
     return sharp(Buffer.from(svg), {
       density: 240,
     })
-      .jpeg({ quality: 94, chromaSubsampling: '4:4:4' })
+      .jpeg({ quality: 90, chromaSubsampling: '4:4:4' })
       .toBuffer();
   }
 
   private async renderFramePdfBuffer(frame: ExportableReadyFrame) {
+    return this.readOrBuildFrameRender(frame, 'pdf', () =>
+      this.renderFramePdfBufferUncached(frame),
+    );
+  }
+
+  private async renderFramePdfBufferUncached(frame: ExportableReadyFrame) {
     const jpgBuffer = await this.renderFrameJpgBuffer(frame);
 
     const pdfDoc = await PDFDocument.create();
@@ -870,6 +946,79 @@ export class ExportsService {
 
   private ensureExportJobsFolder() {
     mkdirSync(this.exportJobsFolder, { recursive: true });
+    mkdirSync(this.renderedFramesFolder, { recursive: true });
+  }
+
+  private async readOrBuildFrameRender(
+    frame: ExportableReadyFrame,
+    format: ExportJobFormat,
+    build: () => Promise<Buffer>,
+  ) {
+    const cachePath = this.buildRenderedFrameCachePath(frame, format);
+
+    if (existsSync(cachePath)) {
+      return readFile(cachePath);
+    }
+
+    const currentBuild = this.renderedFrameBuilds.get(cachePath);
+
+    if (currentBuild) {
+      return currentBuild;
+    }
+
+    const buildPromise = (async () => {
+      this.ensureExportJobsFolder();
+
+      const buffer = await build();
+
+      try {
+        await writeFile(cachePath, buffer);
+      } catch {
+        // Cache writes are opportunistic; the generated export is still valid.
+      }
+
+      return buffer;
+    })().finally(() => {
+      this.renderedFrameBuilds.delete(cachePath);
+    });
+
+    this.renderedFrameBuilds.set(cachePath, buildPromise);
+
+    return buildPromise;
+  }
+
+  private buildRenderedFrameCachePath(
+    frame: ExportableReadyFrame,
+    format: ExportJobFormat,
+  ) {
+    const payload = {
+      version: 3,
+      format,
+      frameId: frame.id,
+      frameName: frame.name,
+      widthM: String(frame.widthM),
+      heightM: String(frame.heightM),
+      cityImageId: frame.projectCityImage.id,
+      cityImageUrl: frame.projectCityImage.imageUrl,
+      cityAuthorName: frame.projectCityImage.authorName,
+      cityCreditText: frame.projectCityImage.creditText,
+      cityImageZoom: frame.cityImageZoom,
+      cityImageOffsetX: frame.cityImageOffsetX,
+      cityImageOffsetY: frame.cityImageOffsetY,
+      gazinImageId: frame.projectGazinImage.id,
+      gazinLibraryImageId: frame.projectGazinImage.gazinLibraryImage.id,
+      gazinImageUrl: frame.projectGazinImage.gazinLibraryImage.imageUrl,
+      gazinTitle: frame.projectGazinImage.gazinLibraryImage.title,
+      gazinDescription: frame.projectGazinImage.gazinLibraryImage.description,
+      gazinImageZoom: frame.gazinImageZoom,
+      gazinImageOffsetX: frame.gazinImageOffsetX,
+      gazinImageOffsetY: frame.gazinImageOffsetY,
+    };
+    const key = createHash('sha256')
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    return join(this.renderedFramesFolder, `${key}.${format}`);
   }
 
   private cleanupExpiredExportJobs() {
@@ -887,6 +1036,26 @@ export class ExportsService {
       this.exportJobs.delete(jobId);
     }
 
+    for (const [imageUrl, record] of this.externalImageCache.entries()) {
+      if (record.expiresAt <= now) {
+        this.externalImageCache.delete(imageUrl);
+      }
+    }
+
+    if (existsSync(this.renderedFramesFolder)) {
+      for (const fileName of readdirSync(this.renderedFramesFolder)) {
+        const filePath = join(this.renderedFramesFolder, fileName);
+        const stats = statSync(filePath);
+
+        if (
+          stats.isFile() &&
+          now - stats.mtimeMs > this.renderedFrameCacheTtlMs
+        ) {
+          unlinkSync(filePath);
+        }
+      }
+    }
+
     if (!existsSync(this.exportJobsFolder)) {
       return;
     }
@@ -895,7 +1064,7 @@ export class ExportsService {
       const filePath = join(this.exportJobsFolder, fileName);
       const stats = statSync(filePath);
 
-      if (now - stats.mtimeMs > this.exportJobTtlMs) {
+      if (stats.isFile() && now - stats.mtimeMs > this.exportJobTtlMs) {
         unlinkSync(filePath);
       }
     }
@@ -916,6 +1085,58 @@ export class ExportsService {
       createdAt: new Date(record.createdAt).toISOString(),
       updatedAt: new Date(record.updatedAt).toISOString(),
     };
+  }
+
+  private async runFrameExportJob(
+    record: ExportJobRecord,
+    frame: ExportableReadyFrame,
+    user: CurrentUser,
+  ) {
+    try {
+      record.currentFrameName = frame.name;
+      record.updatedAt = Date.now();
+
+      const buffer =
+        record.format === 'jpg'
+          ? await this.renderFrameJpgBuffer(frame)
+          : await this.renderFramePdfBuffer(frame);
+
+      await writeFile(record.filePath, buffer);
+
+      record.completedFrames = 1;
+      record.currentFrameName = null;
+      record.status = 'completed';
+      record.updatedAt = Date.now();
+
+      await this.auditLogsService.create({
+        userId: user.id,
+        module: 'EXPORTS',
+        action:
+          record.format === 'jpg' ? 'EXPORT_FRAME_JPG' : 'EXPORT_FRAME_PDF',
+        entityType: 'FRAME',
+        entityId: frame.id,
+        entityLabel: `${frame.wall.communication.fullName} / ${frame.wall.name} / ${frame.name}`,
+        description:
+          record.format === 'jpg'
+            ? 'Quadro exportado em JPG'
+            : 'Quadro exportado em PDF',
+        metadata: {
+          communicationId: frame.wall.communication.id,
+          communicationLabel: frame.wall.communication.fullName,
+          wallName: frame.wall.name,
+          frameName: frame.name,
+          exportJobId: record.id,
+        },
+      });
+    } catch (error) {
+      record.status = 'failed';
+      record.updatedAt = Date.now();
+      record.currentFrameName = null;
+      record.errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Não foi possível gerar a exportação.';
+    }
   }
 
   private async runCommunicationZipJob(
@@ -959,8 +1180,8 @@ export class ExportsService {
         entityLabel: communication.fullName,
         description:
           record.format === 'jpg'
-            ? 'ComunicaÃ§Ã£o exportada em ZIP com JPGs'
-            : 'ComunicaÃ§Ã£o exportada em ZIP com PDFs',
+            ? 'Comunicação exportada em ZIP com JPGs'
+            : 'Comunicação exportada em ZIP com PDFs',
         metadata: {
           totalFrames: record.totalFrames,
           exportJobId: record.id,
@@ -973,7 +1194,7 @@ export class ExportsService {
       record.errorMessage =
         error instanceof Error
           ? error.message
-          : 'NÃ£o foi possÃ­vel gerar a exportaÃ§Ã£o.';
+          : 'Não foi possível gerar a exportação.';
     }
   }
 
@@ -1190,12 +1411,24 @@ export class ExportsService {
       .join('');
   }
 
+  private buildEmbeddedImageSize(placement: { width: number; height: number }) {
+    const maxDimension = 5200;
+    const width = Math.max(Math.ceil(placement.width), 1);
+    const height = Math.max(Math.ceil(placement.height), 1);
+    const scale = Math.min(maxDimension / Math.max(width, height), 1);
+
+    return {
+      width: Math.max(Math.round(width * scale), 1),
+      height: Math.max(Math.round(height * scale), 1),
+    };
+  }
+
   private async buildImageDataUri(
-    filePath: string,
+    imageInput: SharpImageInput,
     width: number,
     height: number,
   ) {
-    const buffer = await sharp(filePath)
+    const buffer = await sharp(imageInput)
       .rotate()
       .resize({
         width,
@@ -1203,9 +1436,98 @@ export class ExportsService {
         fit: 'cover',
         position: 'centre',
       })
-      .jpeg({ quality: 92 })
+      .jpeg({ quality: 88 })
       .toBuffer();
 
     return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+  }
+
+  private async resolveImageInput(
+    imageUrl: string,
+    missingFileMessage: string,
+  ): Promise<SharpImageInput> {
+    const normalizedImageUrl = imageUrl.trim();
+
+    if (this.isExternalHttpUrl(normalizedImageUrl)) {
+      return this.getExternalImageBuffer(normalizedImageUrl);
+    }
+
+    const filePath = fileUrlToAbsolutePath(normalizedImageUrl);
+
+    if (!existsSync(filePath)) {
+      throw new NotFoundException(missingFileMessage);
+    }
+
+    return filePath;
+  }
+
+  private isExternalHttpUrl(value: string) {
+    return /^https?:\/\//i.test(value);
+  }
+
+  private getExternalImageBuffer(imageUrl: string) {
+    const now = Date.now();
+    const cached = this.externalImageCache.get(imageUrl);
+
+    if (cached && cached.expiresAt > now) {
+      return cached.promise;
+    }
+
+    const promise = this.fetchExternalImageBuffer(imageUrl).catch((error) => {
+      this.externalImageCache.delete(imageUrl);
+      throw error;
+    });
+
+    this.externalImageCache.set(imageUrl, {
+      expiresAt: now + this.externalImageCacheTtlMs,
+      promise,
+    });
+
+    return promise;
+  }
+
+  private async fetchExternalImageBuffer(imageUrl: string) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const response = await fetch(imageUrl, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new BadRequestException(
+          `Não foi possível baixar a imagem externa (${response.status}).`,
+        );
+      }
+
+      const contentType = response.headers.get('content-type')?.toLowerCase();
+
+      if (contentType && !contentType.startsWith('image/')) {
+        throw new BadRequestException(
+          'A URL externa não retornou um arquivo de imagem válido.',
+        );
+      }
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      if (!buffer.length) {
+        throw new BadRequestException(
+          'A URL externa retornou uma imagem vazia.',
+        );
+      }
+
+      return buffer;
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new BadRequestException(
+        'Não foi possível baixar a imagem externa para exportação.',
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }

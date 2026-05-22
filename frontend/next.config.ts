@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const internalApiUrl =
-  process.env.INTERNAL_API_URL?.replace(/\/$/, "") ?? "http://localhost:3000";
+  process.env.INTERNAL_API_URL?.replace(/\/+$/, "").replace(/\/api$/, "") ??
+  "http://localhost:3000";
 
 const nextConfig: NextConfig = {
   experimental: {

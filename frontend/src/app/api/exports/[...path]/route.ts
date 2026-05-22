@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 const internalApiUrl =
-  process.env.INTERNAL_API_URL?.replace(/\/$/, "") ?? "http://localhost:3000";
+  process.env.INTERNAL_API_URL?.replace(/\/+$/, "").replace(/\/api$/, "") ??
+  "http://localhost:3000";
 
 function buildTargetUrl(request: NextRequest, path: string[]) {
   const joinedPath = path.map(encodeURIComponent).join("/");
@@ -15,10 +16,14 @@ function buildTargetUrl(request: NextRequest, path: string[]) {
   return `${internalApiUrl}/api/exports/${joinedPath}${search}`;
 }
 
-function buildForwardHeaders(request: NextRequest) {
+type RouteContext = { params: Promise<{ path: string[] }> };
+type ProxyMethod = "GET" | "POST";
+
+function buildForwardHeaders(request: NextRequest, includeBodyHeaders = false) {
   const headers = new Headers();
   const authorization = request.headers.get("authorization");
   const accept = request.headers.get("accept");
+  const contentType = request.headers.get("content-type");
 
   if (authorization) {
     headers.set("authorization", authorization);
@@ -26,6 +31,10 @@ function buildForwardHeaders(request: NextRequest) {
 
   if (accept) {
     headers.set("accept", accept);
+  }
+
+  if (includeBodyHeaders && contentType) {
+    headers.set("content-type", contentType);
   }
 
   return headers;
@@ -69,14 +78,24 @@ function buildAxiosResponseHeaders(
   return new Headers(headerEntries);
 }
 
-export async function GET(
+async function proxyExportsRequest(
   request: NextRequest,
-  context: { params: Promise<{ path: string[] }> },
+  context: RouteContext,
+  method: ProxyMethod,
 ) {
   const { path } = await context.params;
   const targetUrl = buildTargetUrl(request, path);
-  const upstreamResponse = await axios.get<Readable>(targetUrl, {
-    headers: Object.fromEntries(buildForwardHeaders(request).entries()),
+  const requestBody =
+    method === "GET" || request.body === null
+      ? undefined
+      : Buffer.from(await request.arrayBuffer());
+  const upstreamResponse = await axios.request<Readable>({
+    url: targetUrl,
+    method,
+    headers: Object.fromEntries(
+      buildForwardHeaders(request, method !== "GET").entries(),
+    ),
+    data: requestBody,
     responseType: "stream",
     timeout: 0,
     maxContentLength: Infinity,
@@ -95,4 +114,12 @@ export async function GET(
       ),
     ),
   });
+}
+
+export async function GET(request: NextRequest, context: RouteContext) {
+  return proxyExportsRequest(request, context, "GET");
+}
+
+export async function POST(request: NextRequest, context: RouteContext) {
+  return proxyExportsRequest(request, context, "POST");
 }

@@ -1450,6 +1450,54 @@ button {
   padding: 8px;
 }
 
+.image-hover-preview-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.image-hover-preview-popover {
+  position: fixed;
+  top: var(--image-hover-preview-top);
+  left: var(--image-hover-preview-left);
+  z-index: 180;
+  width: min(320px, calc(100vw - 32px));
+  height: min(260px, calc(100vh - 32px));
+  padding: 10px;
+  border: 1px solid var(--panel-header-border);
+  border-radius: 18px;
+  background: var(--card-bg);
+  box-shadow: 0 24px 60px rgba(7, 20, 44, 0.34);
+  pointer-events: none;
+  opacity: 0;
+  animation: image-hover-preview-in 120ms ease forwards;
+}
+
+.image-hover-preview-popover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+  background: var(--table-head-bg);
+}
+
+@keyframes image-hover-preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .library-description-cell {
   max-width: 320px;
   white-space: normal;
@@ -1574,6 +1622,16 @@ button {
 .file-picker.is-selected {
   border-color: var(--btn-refresh-active-border);
   box-shadow: 0 0 0 4px var(--page-search-shadow);
+}
+
+.file-picker.is-dragging {
+  border-color: var(--primary);
+  background:
+    linear-gradient(180deg, var(--info-soft), transparent),
+    var(--page-search-bg);
+  box-shadow:
+    0 0 0 4px var(--page-search-shadow),
+    inset 0 0 0 1px var(--primary);
 }
 
 .file-picker-shell {

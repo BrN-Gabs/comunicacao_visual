@@ -22,6 +22,10 @@ export function getApiErrorMessage(error: unknown, fallback: string) {
     return "Não foi possível se comunicar com o servidor.";
   }
 
+  if (!normalizedError.response && typeof normalizedError.message === "string") {
+    return normalizedError.message;
+  }
+
   return fallback;
 }
 

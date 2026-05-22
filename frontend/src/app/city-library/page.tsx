@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppModal } from "@/components/layout/app-modal";
 import { AppLayout } from "@/components/layout/app-layout";
 import { EditIcon } from "@/components/layout/edit-icon";
+import { ImageHoverPreview } from "@/components/layout/image-hover-preview";
 import { NoticeIcon } from "@/components/layout/notice-icon";
 import { PageTitleCard } from "@/components/layout/page-title";
 import { cityLibraryPage } from "@/components/layout/page-registry";
@@ -61,6 +62,7 @@ export default function CityLibraryPage() {
   const currentUserRole = storedUser.role ?? null;
   const canManageLibrary = hasRoleAccess(currentUserRole, "VIP");
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDragDepthRef = useRef(0);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -100,6 +102,7 @@ export default function CityLibraryPage() {
   const [isSavingPhotographer, setIsSavingPhotographer] = useState(false);
 
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isUploadDragging, setIsUploadDragging] = useState(false);
   const [isImagesModalOpen, setIsImagesModalOpen] = useState(false);
   const [imagesError, setImagesError] = useState("");
   const [imagesSuccess, setImagesSuccess] = useState("");
@@ -231,9 +234,15 @@ export default function CityLibraryPage() {
 
   function clearSelectedFiles() {
     setSelectedFiles([]);
+    setIsUploadDragging(false);
+    uploadDragDepthRef.current = 0;
     if (uploadInputRef.current) {
       uploadInputRef.current.value = "";
     }
+  }
+
+  function getDroppedImageFiles(files: FileList) {
+    return Array.from(files).filter((file) => file.type.startsWith("image/"));
   }
 
   function handleSelectedFilesChange(files: File[]) {
@@ -255,6 +264,60 @@ export default function CityLibraryPage() {
 
     setImagesError("");
     setSelectedFiles(files);
+  }
+
+  function handleUploadDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isUploadingImages) return;
+
+    uploadDragDepthRef.current += 1;
+    setIsUploadDragging(true);
+  }
+
+  function handleUploadDragOver(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isUploadingImages) return;
+
+    event.dataTransfer.dropEffect = "copy";
+    setIsUploadDragging(true);
+  }
+
+  function handleUploadDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    uploadDragDepthRef.current = Math.max(uploadDragDepthRef.current - 1, 0);
+
+    if (uploadDragDepthRef.current === 0) {
+      setIsUploadDragging(false);
+    }
+  }
+
+  function handleUploadDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    uploadDragDepthRef.current = 0;
+    setIsUploadDragging(false);
+
+    if (isUploadingImages) return;
+
+    const imageFiles = getDroppedImageFiles(event.dataTransfer.files);
+
+    if (
+      !imageFiles.length ||
+      imageFiles.length !== event.dataTransfer.files.length
+    ) {
+      clearSelectedFiles();
+      setImagesError("Solte apenas arquivos de imagem.");
+      return;
+    }
+
+    handleSelectedFilesChange(imageFiles);
   }
 
   function openErrorModal(title: string, message: string) {
@@ -848,44 +911,86 @@ export default function CityLibraryPage() {
                       <div className="inline-feedback success">{imagesSuccess}</div>
                     ) : null}
 
-                    <div className="city-library-gallery">
-                      {selectedPhotographer.images.map((image) => (
-                        <article key={image.id} className="city-library-gallery-card">
-                          <div className="city-library-gallery-preview">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={buildImageSource(image.imageUrl)}
-                              alt={image.fileName || selectedPhotographer.name}
-                            />
-                          </div>
-                          <div className="city-library-gallery-copy">
-                            <strong>{image.fileName || "Imagem da cidade"}</strong>
-                            <span>
-                              {new Date(image.createdAt).toLocaleDateString("pt-BR")}
-                            </span>
-                          </div>
-                          <div className="table-action-row">
-                            <button
-                              className="table-action-button table-action-icon-button danger"
-                              type="button"
-                              onClick={() =>
-                                setModal({ type: "confirm-delete-image", image })
-                              }
-                              disabled={deleteActionId === image.id}
-                              aria-label={`Excluir imagem ${image.fileName || image.id}`}
-                              title={`Excluir imagem ${image.fileName || image.id}`}
-                            >
-                              <TrashIcon />
-                            </button>
-                          </div>
-                        </article>
-                      ))}
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Imagem</th>
+                            <th>Descrição</th>
+                            <th>Status</th>
+                            <th>Cadastrada por</th>
+                            <th>Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedPhotographer.images.map((image) => (
+                            <tr key={image.id}>
+                              <td>
+                                <div className="library-image-cell">
+                                  {buildImageSource(image.imageUrl) ? (
+                                    <ImageHoverPreview
+                                      src={buildImageSource(image.imageUrl)}
+                                      alt={image.fileName || selectedPhotographer.name}
+                                      imageClassName="library-thumb"
+                                    />
+                                  ) : (
+                                    <span className="library-thumb library-thumb-placeholder">
+                                      Sem preview
+                                    </span>
+                                  )}
 
-                      {!selectedPhotographer.images.length ? (
-                        <div className="city-library-empty">
-                          Este fotógrafo ainda não possui imagens cadastradas.
-                        </div>
-                      ) : null}
+                                  <div className="table-title-cell">
+                                    <strong>
+                                      {image.fileName || "Imagem da cidade"}
+                                    </strong>
+                                    <span>
+                                      {new Date(image.createdAt).toLocaleDateString(
+                                        "pt-BR",
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                              </td>
+                              <td
+                                className="library-description-cell"
+                                title={`Imagem de ${selectedCity.fullName}`}
+                              >
+                                Imagem de {selectedCity.fullName}
+                              </td>
+                              <td>
+                                <span className="badge badge-success">Ativa</span>
+                              </td>
+                              <td>{selectedPhotographer.name}</td>
+                              <td>
+                                <div className="table-action-row">
+                                  <button
+                                    className="table-action-button table-action-icon-button danger"
+                                    type="button"
+                                    onClick={() =>
+                                      setModal({ type: "confirm-delete-image", image })
+                                    }
+                                    disabled={deleteActionId === image.id}
+                                    aria-label={`Excluir imagem ${
+                                      image.fileName || image.id
+                                    }`}
+                                    title={`Excluir imagem ${image.fileName || image.id}`}
+                                  >
+                                    <TrashIcon />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+
+                          {!selectedPhotographer.images.length ? (
+                            <tr>
+                              <td className="table-feedback" colSpan={5}>
+                                Este fotógrafo ainda não possui imagens cadastradas.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 ) : (
@@ -1051,16 +1156,26 @@ export default function CityLibraryPage() {
             }
           />
 
-          <div className={`file-picker ${selectedFiles.length ? "is-selected" : ""}`}>
+          <div
+            className={`file-picker ${selectedFiles.length ? "is-selected" : ""} ${
+              isUploadDragging ? "is-dragging" : ""
+            }`}
+            onDragEnter={handleUploadDragEnter}
+            onDragOver={handleUploadDragOver}
+            onDragLeave={handleUploadDragLeave}
+            onDrop={handleUploadDrop}
+          >
             <div className="file-picker-shell">
               <span className="file-picker-icon" aria-hidden="true">
                 <UploadIcon />
               </span>
               <div className="file-picker-copy">
                 <strong>
-                  {selectedFiles.length
-                    ? `${selectedFiles.length} arquivo(s) selecionado(s)`
-                    : "Selecione as imagens da cidade"}
+                  {isUploadDragging
+                    ? "Solte as imagens aqui"
+                    : selectedFiles.length
+                      ? `${selectedFiles.length} arquivo(s) selecionado(s)`
+                      : "Arraste ou selecione as imagens da cidade"}
                 </strong>
                 <span>
                   {`Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL} por arquivo e ${MAX_BATCH_IMAGE_UPLOAD_SIZE_LABEL} por envio.`}

@@ -20,14 +20,30 @@ export class ExportsController {
 
   private setDownloadHeaders(
     res: Response,
-    file: { mimeType: string; fileName: string },
+    file: {
+      mimeType: string;
+      fileName: string;
+      buffer?: Buffer;
+      sizeBytes?: number;
+    },
   ) {
+    const fallbackFileName =
+      file.fileName
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\x20-\x7E]/g, '')
+        .replace(/["\\]/g, '')
+        .trim() || 'download';
     const encodedFileName = encodeURIComponent(file.fileName);
 
     res.setHeader('Content-Type', file.mimeType);
+    const contentLength = file.buffer?.length ?? file.sizeBytes;
+    if (contentLength) {
+      res.setHeader('Content-Length', String(contentLength));
+    }
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.fileName}"; filename*=UTF-8''${encodedFileName}`,
+      `attachment; filename="${fallbackFileName}"; filename*=UTF-8''${encodedFileName}`,
     );
   }
 
@@ -55,6 +71,22 @@ export class ExportsController {
     this.setDownloadHeaders(res, file);
 
     return res.send(file.buffer);
+  }
+
+  @Post('frames/:id/jpg-jobs')
+  createFrameJpgJob(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+  ) {
+    return this.exportsService.createFrameExportJob(id, user, 'jpg');
+  }
+
+  @Post('frames/:id/pdf-jobs')
+  createFramePdfJob(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: 'ADMIN' | 'VIP' | 'NORMAL' },
+  ) {
+    return this.exportsService.createFrameExportJob(id, user, 'pdf');
   }
 
   @Get('communications/:id/jpg-zip')

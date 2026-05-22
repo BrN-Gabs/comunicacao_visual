@@ -1,3 +1,4 @@
+import { isAxiosError } from "axios";
 import type { AxiosProgressEvent } from "axios";
 import { api } from "@/lib/api";
 
@@ -38,6 +39,47 @@ function extractFileName(contentDisposition?: string | null) {
   return classicMatch?.[1] ?? null;
 }
 
+async function extractBlobErrorMessage(error: unknown) {
+  if (
+    !isAxiosError(error) ||
+    typeof Blob === "undefined" ||
+    !(error.response?.data instanceof Blob)
+  ) {
+    return null;
+  }
+
+  const text = (await error.response.data.text()).trim();
+
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as {
+      message?: string | string[];
+      error?: string;
+    };
+
+    if (Array.isArray(parsed.message)) {
+      return parsed.message.join(", ");
+    }
+
+    if (typeof parsed.message === "string") {
+      return parsed.message;
+    }
+
+    if (typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+    if (text.length <= 300) {
+      return text;
+    }
+  }
+
+  return null;
+}
+
 async function downloadFile(
   path: string,
   fallbackFileName: string,
@@ -49,29 +91,41 @@ async function downloadFile(
     totalBytes: null,
   });
 
-  const response = await api.get<Blob>(path, {
-    responseType: "blob",
-    onDownloadProgress: (progressEvent: AxiosProgressEvent) => {
-      const loadedBytes =
-        typeof progressEvent.loaded === "number" ? progressEvent.loaded : 0;
-      const totalBytes =
-        typeof progressEvent.total === "number" && progressEvent.total > 0
-          ? progressEvent.total
-          : null;
-      const percent =
-        typeof progressEvent.progress === "number"
-          ? Math.round(progressEvent.progress * 100)
-          : totalBytes
-            ? Math.round((loadedBytes / totalBytes) * 100)
-            : 0;
+  let response;
 
-      options.onProgress?.({
-        percent: Math.min(Math.max(percent, 0), 100),
-        loadedBytes,
-        totalBytes,
-      });
-    },
-  });
+  try {
+    response = await api.get<Blob>(path, {
+      responseType: "blob",
+      onDownloadProgress: (progressEvent: AxiosProgressEvent) => {
+        const loadedBytes =
+          typeof progressEvent.loaded === "number" ? progressEvent.loaded : 0;
+        const totalBytes =
+          typeof progressEvent.total === "number" && progressEvent.total > 0
+            ? progressEvent.total
+            : null;
+        const percent =
+          typeof progressEvent.progress === "number"
+            ? Math.round(progressEvent.progress * 100)
+            : totalBytes
+              ? Math.round((loadedBytes / totalBytes) * 100)
+              : 0;
+
+        options.onProgress?.({
+          percent: Math.min(Math.max(percent, 0), 100),
+          loadedBytes,
+          totalBytes,
+        });
+      },
+    });
+  } catch (error) {
+    const message = await extractBlobErrorMessage(error);
+
+    if (message) {
+      throw new Error(message);
+    }
+
+    throw error;
+  }
 
   const contentType =
     typeof response.headers["content-type"] === "string"
@@ -96,7 +150,9 @@ async function downloadFile(
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.URL.revokeObjectURL(downloadUrl);
+  window.setTimeout(() => {
+    window.URL.revokeObjectURL(downloadUrl);
+  }, 1000);
 
   options.onProgress?.({
     percent: 100,
@@ -117,6 +173,22 @@ export async function downloadFramePdf(
   options?: DownloadFileOptions,
 ) {
   await downloadFile(`/exports/frames/${frameId}/pdf`, `${frameId}.pdf`, options);
+}
+
+export async function createFrameJpgJob(frameId: string) {
+  const { data } = await api.post<ExportJobInfo>(
+    `/exports/frames/${frameId}/jpg-jobs`,
+  );
+
+  return data;
+}
+
+export async function createFramePdfJob(frameId: string) {
+  const { data } = await api.post<ExportJobInfo>(
+    `/exports/frames/${frameId}/pdf-jobs`,
+  );
+
+  return data;
 }
 
 export async function downloadCommunicationJpgZip(
@@ -160,6 +232,17 @@ export async function downloadExportJob(
 }
 
 export async function downloadCommunicationPdf(
+  communicationId: string,
+  options?: DownloadFileOptions,
+) {
+  await downloadFile(
+    `/exports/communications/${communicationId}/pdf`,
+    `${communicationId}-quadros.pdf`,
+    options,
+  );
+}
+
+export async function downloadCommunicationPdfZip(
   communicationId: string,
   options?: DownloadFileOptions,
 ) {

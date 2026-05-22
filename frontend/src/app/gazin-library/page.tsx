@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppModal } from "@/components/layout/app-modal";
 import { AppLayout } from "@/components/layout/app-layout";
 import { EditIcon } from "@/components/layout/edit-icon";
+import { ImageHoverPreview } from "@/components/layout/image-hover-preview";
 import { NoticeIcon } from "@/components/layout/notice-icon";
 import { PageTitleCard } from "@/components/layout/page-title";
 import { gazinLibraryPage } from "@/components/layout/page-registry";
@@ -129,6 +130,8 @@ export default function GazinLibraryPage() {
   );
   const [libraryModal, setLibraryModal] = useState<LibraryModalState>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const fileDropDepthRef = useRef(0);
+  const [isFileDragging, setIsFileDragging] = useState(false);
 
   useEffect(() => {
     return subscribeToAppRefresh(() => {
@@ -152,6 +155,8 @@ export default function GazinLibraryPage() {
 
   function clearSelectedFile() {
     setSelectedFile(null);
+    setIsFileDragging(false);
+    fileDropDepthRef.current = 0;
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -174,6 +179,65 @@ export default function GazinLibraryPage() {
 
     setFormError("");
     setSelectedFile(nextFile);
+  }
+
+  function getDroppedImageFiles(files: FileList) {
+    return Array.from(files).filter((file) => file.type.startsWith("image/"));
+  }
+
+  function handleFileDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isSubmitting) return;
+
+    fileDropDepthRef.current += 1;
+    setIsFileDragging(true);
+  }
+
+  function handleFileDragOver(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (isSubmitting) return;
+
+    event.dataTransfer.dropEffect = "copy";
+    setIsFileDragging(true);
+  }
+
+  function handleFileDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    fileDropDepthRef.current = Math.max(fileDropDepthRef.current - 1, 0);
+
+    if (fileDropDepthRef.current === 0) {
+      setIsFileDragging(false);
+    }
+  }
+
+  function handleFileDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    fileDropDepthRef.current = 0;
+    setIsFileDragging(false);
+
+    if (isSubmitting) return;
+
+    const imageFiles = getDroppedImageFiles(event.dataTransfer.files);
+
+    if (event.dataTransfer.files.length !== 1 || imageFiles.length !== 1) {
+      clearSelectedFile();
+      setFormError(
+        event.dataTransfer.files.length > 1
+          ? "Solte apenas um arquivo de imagem por vez."
+          : "Solte apenas arquivos de imagem.",
+      );
+      return;
+    }
+
+    handleSelectedFileChange(imageFiles[0]);
   }
 
   function openErrorModal(title: string, message: string) {
@@ -581,6 +645,18 @@ export default function GazinLibraryPage() {
       ? sourceMode === "url"
       : isExternalImageUrl(formValues.imageUrl) && !selectedFile;
   const shouldShowFileInput = formMode === "edit" || sourceMode === "upload";
+  const filePickerTitle = isFileDragging
+    ? "Solte a imagem aqui"
+    : selectedFile
+      ? selectedFile.name
+      : formMode === "create"
+        ? "Arraste ou selecione o arquivo principal da imagem"
+        : "Nenhum novo arquivo selecionado";
+  const filePickerDescription = selectedFile
+    ? `${formatFileSize(selectedFile.size)} • pronto para envio`
+    : formMode === "create"
+      ? `Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL}.`
+      : "Opcional. Envie um novo arquivo apenas se quiser substituir o atual.";
   const statusModal =
     libraryModal?.type === "confirm-status" ? libraryModal : null;
   const isDeleteModalOpen = libraryModal?.type === "confirm-delete";
@@ -718,11 +794,10 @@ export default function GazinLibraryPage() {
                       <td>
                         <div className="library-image-cell">
                           {buildImageSource(image.imageUrl) ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
+                            <ImageHoverPreview
                               src={buildImageSource(image.imageUrl)}
                               alt={image.title}
-                              className="library-thumb"
+                              imageClassName="library-thumb"
                             />
                           ) : (
                             <span className="library-thumb library-thumb-placeholder">
@@ -948,12 +1023,18 @@ export default function GazinLibraryPage() {
                     type="file"
                     accept="image/*"
                     onChange={(event) =>
-                      setSelectedFile(event.target.files?.[0] ?? null)
+                      handleSelectedFileChange(event.target.files?.[0] ?? null)
                     }
                   />
 
                   <div
-                    className={`file-picker ${selectedFile ? "is-selected" : ""}`}
+                    className={`file-picker ${selectedFile ? "is-selected" : ""} ${
+                      isFileDragging ? "is-dragging" : ""
+                    }`}
+                    onDragEnter={handleFileDragEnter}
+                    onDragOver={handleFileDragOver}
+                    onDragLeave={handleFileDragLeave}
+                    onDrop={handleFileDrop}
                   >
                     <div className="file-picker-shell">
                       <span className="file-picker-icon" aria-hidden="true">
@@ -961,20 +1042,8 @@ export default function GazinLibraryPage() {
                       </span>
 
                       <div className="file-picker-copy">
-                        <strong>
-                          {selectedFile
-                            ? selectedFile?.name
-                            : formMode === "create"
-                              ? "Selecione o arquivo principal da imagem"
-                              : "Nenhum novo arquivo selecionado"}
-                        </strong>
-                        <span>
-                          {selectedFile
-                            ? `${formatFileSize(selectedFile?.size ?? 0)} • pronto para envio`
-                            : formMode === "create"
-                              ? `Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL}.`
-                              : "Opcional. Envie um novo arquivo apenas se quiser substituir o atual."}
-                        </span>
+                        <strong>{filePickerTitle}</strong>
+                        <span>{filePickerDescription}</span>
                       </div>
                     </div>
 
@@ -1011,11 +1080,10 @@ export default function GazinLibraryPage() {
 
             <div className="library-preview-card">
               {currentPreviewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
+                <ImageHoverPreview
                   src={currentPreviewUrl}
                   alt={formValues.title || "Preview da imagem da Gazin"}
-                  className="library-preview-media"
+                  imageClassName="library-preview-media"
                 />
               ) : (
                 <div className="library-preview-media library-thumb-placeholder">
@@ -1184,19 +1252,25 @@ export default function GazinLibraryPage() {
                     : "Substituir arquivo (opcional)"}
                 </span>
 
-                  <input
-                    ref={fileInputRef}
-                    id="gazin-library-file-input-modal"
-                    className="file-input-native"
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) =>
-                      handleSelectedFileChange(event.target.files?.[0] ?? null)
-                    }
-                  />
+                <input
+                  ref={fileInputRef}
+                  id="gazin-library-file-input-modal"
+                  className="file-input-native"
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) =>
+                    handleSelectedFileChange(event.target.files?.[0] ?? null)
+                  }
+                />
 
                 <div
-                  className={`file-picker ${selectedFile ? "is-selected" : ""}`}
+                  className={`file-picker ${selectedFile ? "is-selected" : ""} ${
+                    isFileDragging ? "is-dragging" : ""
+                  }`}
+                  onDragEnter={handleFileDragEnter}
+                  onDragOver={handleFileDragOver}
+                  onDragLeave={handleFileDragLeave}
+                  onDrop={handleFileDrop}
                 >
                   <div className="file-picker-shell">
                     <span className="file-picker-icon" aria-hidden="true">
@@ -1204,20 +1278,8 @@ export default function GazinLibraryPage() {
                     </span>
 
                     <div className="file-picker-copy">
-                        <strong>
-                          {selectedFile
-                            ? selectedFile?.name
-                            : formMode === "create"
-                              ? "Selecione o arquivo principal da imagem"
-                              : "Nenhum novo arquivo selecionado"}
-                        </strong>
-                        <span>
-                          {selectedFile
-                            ? `${formatFileSize(selectedFile?.size ?? 0)} - pronto para envio`
-                            : formMode === "create"
-                              ? `Envie JPG, PNG ou WebP com até ${MAX_IMAGE_UPLOAD_SIZE_LABEL}.`
-                              : "Opcional. Envie um novo arquivo apenas se quiser substituir o atual."}
-                      </span>
+                      <strong>{filePickerTitle}</strong>
+                      <span>{filePickerDescription}</span>
                     </div>
                   </div>
 
@@ -1254,11 +1316,10 @@ export default function GazinLibraryPage() {
 
           <div className="library-preview-card">
             {currentPreviewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <ImageHoverPreview
                 src={currentPreviewUrl}
                 alt={formValues.title || "Preview da imagem da Gazin"}
-                className="library-preview-media"
+                imageClassName="library-preview-media"
               />
             ) : (
               <div className="library-preview-media library-thumb-placeholder">

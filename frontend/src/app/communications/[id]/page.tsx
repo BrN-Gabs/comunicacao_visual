@@ -31,12 +31,12 @@ import {
   validateCommunication,
 } from "@/services/communications.service";
 import {
+  createFrameJpgJob,
+  createFramePdfJob,
   createCommunicationJpgZipJob,
   createCommunicationPdfZipJob,
   type DownloadProgressInfo,
   downloadExportJob,
-  downloadFrameJpg,
-  downloadFramePdf,
   getExportJob,
 } from "@/services/exports.service";
 import {
@@ -558,6 +558,7 @@ export default function CommunicationDetailsPage() {
     jobId: string,
     format: "jpg" | "pdf",
     totalFramesHint: number,
+    mode: "zip" | "frame" = "zip",
   ) {
     const startedAt = Date.now();
 
@@ -576,17 +577,31 @@ export default function CommunicationDetailsPage() {
 
       const totalFrames = Math.max(job.totalFrames || totalFramesHint || 0, 1);
       const completedFrames = Math.min(job.completedFrames || 0, totalFrames);
+      const isFrameJob = mode === "frame";
 
       setDownloadProgress({
-        title:
-          format === "jpg" ? "Gerando ZIP dos JPGs" : "Gerando ZIP dos PDFs",
-        description: job.currentFrameName
-          ? `Gerando ${job.currentFrameName} (${completedFrames}/${totalFrames})`
-          : `Gerando ${completedFrames} de ${totalFrames} quadro(s)`,
+        title: isFrameJob
+          ? format === "jpg"
+            ? "Gerando JPG do quadro"
+            : "Gerando PDF do quadro"
+          : format === "jpg"
+            ? "Gerando ZIP dos JPGs"
+            : "Gerando ZIP dos PDFs",
+        description: isFrameJob
+          ? job.currentFrameName
+            ? `Preparando ${job.currentFrameName}`
+            : "Preparando o arquivo para download"
+          : job.currentFrameName
+            ? `Gerando ${job.currentFrameName} (${completedFrames}/${totalFrames})`
+            : `Gerando ${completedFrames} de ${totalFrames} quadro(s)`,
         percent: Math.round((completedFrames / totalFrames) * 100),
         loadedBytes: completedFrames,
         totalBytes: totalFrames,
-        metaLabel: `${completedFrames} de ${totalFrames} quadro(s) gerado(s)`,
+        metaLabel: isFrameJob
+          ? completedFrames > 0
+            ? "Arquivo gerado"
+            : "Gerando arquivo..."
+          : `${completedFrames} de ${totalFrames} quadro(s) gerado(s)`,
       });
 
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
@@ -746,20 +761,33 @@ export default function CommunicationDetailsPage() {
         ? "Aguarde o JPG do quadro chegar a 100%."
         : "Aguarde o PDF do quadro chegar a 100%.";
     setDownloadState(nextState);
-    openDownloadProgress(title, description);
+    setDownloadProgress({
+      title:
+        format === "jpg" ? "Gerando JPG do quadro" : "Gerando PDF do quadro",
+      description: `Preparando ${frameName} para download...`,
+      percent: 0,
+      loadedBytes: 0,
+      totalBytes: 1,
+      metaLabel: "Gerando arquivo...",
+    });
 
     try {
-      if (format === "jpg") {
-        await downloadFrameJpg(frameId, {
-          onProgress: (progress) =>
-            handleDownloadProgress(title, description, progress),
-        });
-      } else {
-        await downloadFramePdf(frameId, {
-          onProgress: (progress) =>
-            handleDownloadProgress(title, description, progress),
-        });
-      }
+      const createdJob =
+        format === "jpg"
+          ? await createFrameJpgJob(frameId)
+          : await createFramePdfJob(frameId);
+      const completedJob = await waitForExportJob(
+        createdJob.id,
+        format,
+        createdJob.totalFrames,
+        "frame",
+      );
+
+      openDownloadProgress(title, description);
+      await downloadExportJob(completedJob.id, completedJob.fileName, {
+        onProgress: (progress) =>
+          handleDownloadProgress(title, description, progress),
+      });
       await finishDownloadProgress();
     } catch (error) {
       setDownloadProgress(null);
